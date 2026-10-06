@@ -1,166 +1,62 @@
-import { useEffect, useState } from 'react'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
-import { supabase } from '../lib/supabaseClient'
-import type { Supplier } from '../lib/types'
-import Modal from '../components/Modal'
-import ConfirmDialog from '../components/ConfirmDialog'
+import { useState } from 'react';
+import { supabase } from '../supabase';
+import { useAuth } from '../lib/auth';
+import { useLookups } from '../lib/lookups';
+import { Badge, Empty, Field, Modal, PageHeader, SearchBox, norm, useAction, useToast } from '../components/ui';
 
-const EMPTY = { code: '', company_name: '', contact_name: '', phone: '', email: '', address: '', status: 'activo' as const }
+const blank = { name: '', kind: '', contact: '', phone: '', email: '', address: '', active: true };
 
 export default function Suppliers() {
-  const [rows, setRows] = useState<Supplier[]>([])
-  const [editing, setEditing] = useState<Supplier | null>(null)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState(EMPTY)
-  const [deleting, setDeleting] = useState<Supplier | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { suppliers, reload } = useLookups();
+  const { isAdmin } = useAuth();
+  const run = useAction(); const toast = useToast();
+  const [q, setQ] = useState(''); const [edit, setEdit] = useState<any | null>(null);
 
-  async function load() {
-    const { data } = await supabase.from('suppliers').select('*').order('company_name')
-    setRows((data as Supplier[]) ?? [])
-  }
-  useEffect(() => {
-    load()
-  }, [])
+  const rows = suppliers.filter((s) => norm(`${s.name} ${s.contact} ${s.phone} ${s.email} ${s.kind}`).includes(norm(q)));
 
-  function openNew() {
-    setEditing(null)
-    setForm(EMPTY)
-    setError(null)
-    setShowForm(true)
-  }
-  function openEdit(s: Supplier) {
-    setEditing(s)
-    setForm({
-      code: s.code,
-      company_name: s.company_name,
-      contact_name: s.contact_name ?? '',
-      phone: s.phone ?? '',
-      email: s.email ?? '',
-      address: s.address ?? '',
-      status: s.status as 'activo',
-    })
-    setError(null)
-    setShowForm(true)
-  }
-
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
-    setError(null)
-    const result = editing
-      ? await supabase.from('suppliers').update(form).eq('id', editing.id)
-      : await supabase.from('suppliers').insert(form)
-    if (result.error) return setError(result.error.message)
-    setShowForm(false)
-    load()
-  }
-
-  async function handleDelete() {
-    if (!deleting) return
-    const { error } = await supabase.from('suppliers').delete().eq('id', deleting.id)
-    if (error) setError(error.message)
-    setDeleting(null)
-    load()
-  }
+  const save = async () => {
+    if (!edit.name.trim()) return toast('Escribe el nombre o razón social.', 'error');
+    const { id, created_at, ...payload } = edit;
+    const ok = await run(async () => {
+      const r = id ? await supabase.from('suppliers').update(payload).eq('id', id) : await supabase.from('suppliers').insert(payload);
+      if (r.error) throw r.error; return true;
+    }, 'Proveedor guardado');
+    if (ok) { setEdit(null); reload(); }
+  };
+  const del = async (s: any) => {
+    if (!window.confirm(`¿Eliminar a "${s.name}"? Si ya tiene movimientos, mejor márcalo como inactivo.`)) return;
+    const ok = await run(async () => { const { error } = await supabase.from('suppliers').delete().eq('id', s.id); if (error) throw error; return true; }, 'Proveedor eliminado');
+    if (ok) reload();
+  };
+  const set = (k: string, v: any) => setEdit({ ...edit, [k]: v });
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Proveedores</h1>
-        <button className="btn-primary" onClick={openNew}>
-          <Plus size={18} /> Nuevo proveedor
-        </button>
-      </div>
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
-            <tr>
-              <th className="px-4 py-3">Código</th>
-              <th className="px-4 py-3">Empresa</th>
-              <th className="px-4 py-3">Contacto</th>
-              <th className="px-4 py-3">Teléfono</th>
-              <th className="px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((s) => (
-              <tr key={s.id} className="border-t border-slate-100">
-                <td className="px-4 py-3 font-medium">{s.code}</td>
-                <td className="px-4 py-3">{s.company_name}</td>
-                <td className="px-4 py-3">{s.contact_name || '—'}</td>
-                <td className="px-4 py-3">{s.phone || '—'}</td>
-                <td className="px-4 py-3 text-right">
-                  <button className="mr-2 text-slate-500 hover:text-brand-600" onClick={() => openEdit(s)}>
-                    <Pencil size={16} />
-                  </button>
-                  <button className="text-slate-500 hover:text-red-600" onClick={() => setDeleting(s)}>
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">Sin proveedores todavía.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {showForm && (
-        <Modal title={editing ? 'Editar proveedor' : 'Nuevo proveedor'} onClose={() => setShowForm(false)}>
-          <form onSubmit={handleSave} className="space-y-3">
-            <div>
-              <label className="label">Código</label>
-              <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required />
-            </div>
-            <div>
-              <label className="label">Empresa / nombre</label>
-              <input className="input" value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} required />
-            </div>
-            <div>
-              <label className="label">Contacto</label>
-              <input className="input" value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Teléfono</label>
-                <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Email</label>
-                <input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </div>
-            </div>
-            <div>
-              <label className="label">Dirección</label>
-              <input className="input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Estado</label>
-              <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as 'activo' })}>
-                <option value="activo">Activo</option>
-                <option value="inactivo">Inactivo</option>
-              </select>
-            </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
-              <button type="submit" className="btn-primary">Guardar</button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {deleting && (
-        <ConfirmDialog
-          message={`¿Eliminar el proveedor "${deleting.company_name}"?`}
-          onConfirm={handleDelete}
-          onCancel={() => setDeleting(null)}
-        />
-      )}
+      <PageHeader title="Proveedores" actions={isAdmin && <button className="btn btn-primary" onClick={() => setEdit({ ...blank })}>Nuevo proveedor</button>} />
+      <div className="toolbar"><SearchBox value={q} onChange={setQ} placeholder="Buscar proveedor…" /></div>
+      <div className="table-wrap"><table className="grid">
+        <thead><tr><th>Nombre / razón social</th><th>Tipo</th><th>Contacto</th><th>Teléfono</th><th>Email</th><th>Estado</th>{isAdmin && <th />}</tr></thead>
+        <tbody>
+          {rows.map((s) => (
+            <tr key={s.id}><td><b>{s.name}</b><div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{s.address}</div></td><td>{s.kind}</td><td>{s.contact}</td><td>{s.phone}</td><td>{s.email}</td>
+              <td><Badge text={s.active ? 'Activo' : 'Inactivo'} tone={s.active ? 'ok' : 'muted'} /></td>
+              {isAdmin && <td><div className="row-actions"><button className="btn btn-sm" onClick={() => setEdit({ ...blank, ...s })}>Editar</button><button className="btn btn-sm btn-danger" onClick={() => del(s)}>Eliminar</button></div></td>}
+            </tr>))}
+        </tbody>
+      </table>{!rows.length && <Empty text="No hay proveedores." />}</div>
+      {edit && (
+        <Modal title={edit.id ? 'Editar proveedor' : 'Nuevo proveedor'} onClose={() => setEdit(null)}
+          footer={<><button className="btn" onClick={() => setEdit(null)}>Cancelar</button><button className="btn btn-primary" onClick={save}>Guardar</button></>}>
+          <div className="form-grid">
+            <Field label="Nombre / razón social *" full><input value={edit.name} onChange={(e) => set('name', e.target.value)} /></Field>
+            <Field label="Tipo (combustible, repuestos…)"><input value={edit.kind || ''} onChange={(e) => set('kind', e.target.value)} /></Field>
+            <Field label="Contacto"><input value={edit.contact || ''} onChange={(e) => set('contact', e.target.value)} /></Field>
+            <Field label="Teléfono"><input value={edit.phone || ''} onChange={(e) => set('phone', e.target.value)} /></Field>
+            <Field label="Email"><input type="email" value={edit.email || ''} onChange={(e) => set('email', e.target.value)} /></Field>
+            <Field label="Dirección" full><input value={edit.address || ''} onChange={(e) => set('address', e.target.value)} /></Field>
+            <label className="check"><input type="checkbox" checked={edit.active} onChange={(e) => set('active', e.target.checked)} /> Activo</label>
+          </div>
+        </Modal>)}
     </div>
-  )
+  );
 }

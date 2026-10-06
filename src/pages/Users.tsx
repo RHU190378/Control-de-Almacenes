@@ -1,261 +1,103 @@
-import { useEffect, useState } from 'react'
-import { Plus, Pencil } from 'lucide-react'
-import { supabase } from '../lib/supabaseClient'
-import { supabaseAdmin } from '../lib/supabaseAdmin'
-import { useAuth } from '../context/AuthContext'
-import type { Profile, Role, Warehouse } from '../lib/types'
-import { ROLE_LABELS } from '../lib/types'
-import Modal from '../components/Modal'
+import { useState } from 'react';
+import { supabase, tempClient } from '../supabase';
+import { useAuth } from '../lib/auth';
+import { useLookups } from '../lib/lookups';
+import { ROLE_LABEL, errMsg } from '../lib/util';
+import { Badge, Empty, Field, Modal, PageHeader, useAction, useToast } from '../components/ui';
 
-interface Row extends Profile {
-  user_warehouses?: { warehouse_id: string }[]
-}
+const blank = { id: '', full_name: '', email: '', password: '', role: 'user', warehouse_id: '', active: true };
 
 export default function Users() {
-  const { isAdminSistema, profile: me } = useAuth()
-  const [rows, setRows] = useState<Row[]>([])
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
-  const [showForm, setShowForm] = useState(false)
-  const [editing, setEditing] = useState<Row | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const { profiles, warehouses, reload } = useLookups();
+  const { profile: me } = useAuth();
+  const run = useAction(); const toast = useToast();
+  const [edit, setEdit] = useState<any | null>(null);
+  const [newPass, setNewPass] = useState('');
+  const set = (k: string, v: any) => setEdit({ ...edit, [k]: v });
+  const isNew = edit && !edit.id;
+  const whName = (id: string) => warehouses.find((w) => w.id === id)?.name || '—';
 
-  // formulario
-  const [fullName, setFullName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [role, setRole] = useState<Role>('usuario')
-  const [status, setStatus] = useState<'activo' | 'inactivo'>('activo')
-  const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>([])
+  const save = async () => {
+    if (!edit.full_name.trim()) return toast('Escribe el nombre completo.', 'error');
+    if (edit.role !== 'system_admin' && !edit.warehouse_id) return toast('Elige el almacén de este usuario.', 'error');
+    const fields = { full_name: edit.full_name.trim(), role: edit.role, warehouse_id: edit.role === 'system_admin' ? null : edit.warehouse_id, active: edit.active };
 
-  async function load() {
-    const [{ data: profiles }, { data: allWh }] = await Promise.all([
-      supabase.from('profiles').select('*, user_warehouses(warehouse_id)').order('created_at'),
-      supabase.from('warehouses').select('*').order('name'),
-    ])
-    setRows((profiles as Row[]) ?? [])
-    setWarehouses((allWh as Warehouse[]) ?? [])
-  }
-  useEffect(() => {
-    load()
-  }, [])
-
-  function openNew() {
-    setEditing(null)
-    setFullName('')
-    setEmail('')
-    setPassword('')
-    setRole('usuario')
-    setStatus('activo')
-    setSelectedWarehouses([])
-    setError(null)
-    setShowForm(true)
-  }
-
-  function openEdit(u: Row) {
-    setEditing(u)
-    setFullName(u.full_name)
-    setEmail('')
-    setPassword('')
-    setRole(u.role)
-    setStatus(u.status)
-    setSelectedWarehouses((u.user_warehouses ?? []).map((w) => w.warehouse_id))
-    setError(null)
-    setShowForm(true)
-  }
-
-  function toggleWarehouse(id: string) {
-    setSelectedWarehouses((prev) => (prev.includes(id) ? prev.filter((w) => w !== id) : [...prev, id]))
-  }
-
-  async function saveWarehouseAssignments(userId: string) {
-    await supabase.from('user_warehouses').delete().eq('user_id', userId)
-    if (selectedWarehouses.length > 0) {
-      await supabase
-        .from('user_warehouses')
-        .insert(selectedWarehouses.map((warehouse_id) => ({ user_id: userId, warehouse_id })))
+    if (isNew) {
+      if (!/^\S+@\S+\.\S+$/.test(edit.email.trim())) return toast('Escribe un correo válido.', 'error');
+      if (edit.password.length < 6) return toast('La contraseña debe tener al menos 6 caracteres.', 'error');
+      const ok = await run(async () => {
+        const tmp = tempClient();
+        const { data, error } = await tmp.auth.signUp({ email: edit.email.trim(), password: edit.password, options: { data: { full_name: fields.full_name } } });
+        if (error) throw error;
+        const uid = data.user?.id;
+        if (!uid) throw new Error('No se pudo crear la cuenta. Revisa que "Confirm email" esté desactivado en Supabase.');
+        const { error: e2 } = await supabase.from('profiles').update({ ...fields, active: true }).eq('id', uid);
+        if (e2) { reload(); throw new Error('La cuenta se creó pero no se pudo activar: ' + errMsg(e2) + ' Búscala en la lista, edítala y actívala.'); }
+        return true;
+      }, 'Usuario creado');
+      if (ok) { setEdit(null); reload(); }
+      return;
     }
-  }
+    const ok = await run(async () => { const { error } = await supabase.from('profiles').update(fields).eq('id', edit.id); if (error) throw error; return true; }, 'Usuario actualizado');
+    if (ok) { setEdit(null); reload(); }
+  };
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
-    setError(null)
-    setSaving(true)
-    try {
-      if (editing) {
-        const { error: updError } = await supabase
-          .from('profiles')
-          .update({ full_name: fullName, role, status })
-          .eq('id', editing.id)
-        if (updError) throw updError
-        await saveWarehouseAssignments(editing.id)
-      } else {
-        // Se usa un cliente secundario (sin sesión persistente) para no
-        // reemplazar la sesión del administrador que está creando el usuario.
-        const { data, error: signUpError } = await supabaseAdmin.auth.signUp({
-          email,
-          password,
-          options: { data: { full_name: fullName } },
-        })
-        if (signUpError) throw signUpError
-        const newUserId = data.user?.id
-        if (!newUserId) throw new Error('No se pudo crear el usuario')
-
-        // El nuevo usuario queda con rol "usuario" por defecto (vía trigger).
-        // Si el administrador eligió otro rol, lo actualizamos aquí.
-        if (role !== 'usuario') {
-          const { error: roleError } = await supabase
-            .from('profiles')
-            .update({ role, status })
-            .eq('id', newUserId)
-          if (roleError) throw roleError
-        } else if (status !== 'activo') {
-          await supabase.from('profiles').update({ status }).eq('id', newUserId)
-        }
-        await saveWarehouseAssignments(newUserId)
-      }
-      setShowForm(false)
-      load()
-    } catch (err: any) {
-      setError(err.message ?? 'Error al guardar')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const canEditRole = isAdminSistema
-  const roleOptions: Role[] = isAdminSistema ? ['admin_sistema', 'admin_almacen', 'usuario'] : ['usuario']
+  const resetPass = async () => {
+    if (newPass.length < 6) return toast('La contraseña debe tener al menos 6 caracteres.', 'error');
+    const ok = await run(async () => { const { error } = await supabase.rpc('admin_set_password', { p_user: edit.id, p_password: newPass }); if (error) throw error; return true; }, 'Contraseña cambiada');
+    if (ok) setNewPass('');
+  };
+  const del = async () => {
+    if (!window.confirm(`¿Eliminar definitivamente a ${edit.full_name}? Sus notas anteriores se conservan.`)) return;
+    const ok = await run(async () => { const { error } = await supabase.rpc('admin_delete_user', { p_user: edit.id }); if (error) throw error; return true; }, 'Usuario eliminado');
+    if (ok) { setEdit(null); reload(); }
+  };
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Usuarios</h1>
-        <button className="btn-primary" onClick={openNew}>
-          <Plus size={18} /> Nuevo usuario
-        </button>
-      </div>
+      <PageHeader title="Usuarios" subtitle="Hasta 3 administradores de sistema y 2 administradores por almacén. Los usuarios de almacén son ilimitados."
+        actions={<button className="btn btn-primary" onClick={() => setEdit({ ...blank })}>Nuevo usuario</button>} />
+      <div className="table-wrap"><table className="grid">
+        <thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Almacén</th><th>Estado</th><th /></tr></thead>
+        <tbody>
+          {profiles.map((p) => (
+            <tr key={p.id}><td><b>{p.full_name}</b>{p.id === me?.id && <small> (tú)</small>}</td><td>{p.email}</td><td>{ROLE_LABEL[p.role]}</td>
+              <td>{p.role === 'system_admin' ? 'Todos' : whName(p.warehouse_id)}</td>
+              <td><Badge text={p.active ? 'Activo' : 'Inactivo'} tone={p.active ? 'ok' : 'muted'} /></td>
+              <td><div className="row-actions"><button className="btn btn-sm" onClick={() => { setNewPass(''); setEdit({ ...blank, ...p, warehouse_id: p.warehouse_id || '' }); }}>Editar</button></div></td></tr>))}
+        </tbody></table>{!profiles.length && <Empty text="No hay usuarios." />}</div>
 
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
-            <tr>
-              <th className="px-4 py-3">Nombre</th>
-              <th className="px-4 py-3">Rol</th>
-              <th className="px-4 py-3">Almacenes</th>
-              <th className="px-4 py-3">Estado</th>
-              <th className="px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((u) => (
-              <tr key={u.id} className="border-t border-slate-100">
-                <td className="px-4 py-3 font-medium">
-                  {u.full_name} {u.id === me?.id && <span className="text-xs text-slate-400">(tú)</span>}
-                </td>
-                <td className="px-4 py-3">{ROLE_LABELS[u.role]}</td>
-                <td className="px-4 py-3">
-                  {(u.user_warehouses ?? [])
-                    .map((uw) => warehouses.find((w) => w.id === uw.warehouse_id)?.name)
-                    .filter(Boolean)
-                    .join(', ') || '—'}
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${u.status === 'activo' ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
-                    {u.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button className="text-slate-500 hover:text-brand-600" onClick={() => openEdit(u)}>
-                    <Pencil size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">Sin usuarios visibles.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {showForm && (
-        <Modal title={editing ? 'Editar usuario' : 'Nuevo usuario'} onClose={() => setShowForm(false)} wide>
-          <form onSubmit={handleSave} className="space-y-3">
-            <div>
-              <label className="label">Nombre completo</label>
-              <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
-            </div>
-            {!editing && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label">Correo electrónico</label>
-                  <input type="email" className="input" value={email} onChange={(e) => setEmail(e.target.value)} required />
-                </div>
-                <div>
-                  <label className="label">Contraseña</label>
-                  <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required />
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Rol</label>
-                <select
-                  className="input"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as Role)}
-                  disabled={!canEditRole && !!editing}
-                >
-                  {roleOptions.map((r) => (
-                    <option key={r} value={r}>{ROLE_LABELS[r]}</option>
-                  ))}
+      {edit && (
+        <Modal title={isNew ? 'Nuevo usuario' : 'Editar usuario'} onClose={() => setEdit(null)}
+          footer={<><button className="btn" onClick={() => setEdit(null)}>Cancelar</button><button className="btn btn-primary" onClick={save}>{isNew ? 'Crear usuario' : 'Guardar'}</button></>}>
+          <div className="form-grid">
+            <Field label="Nombre completo *" full><input value={edit.full_name} onChange={(e) => set('full_name', e.target.value)} /></Field>
+            <Field label="Correo *" full><input type="email" value={edit.email} onChange={(e) => set('email', e.target.value)} disabled={!isNew} /></Field>
+            {isNew && <Field label="Contraseña inicial * (mínimo 6)" full><input type="text" value={edit.password} onChange={(e) => set('password', e.target.value)} autoComplete="off" /></Field>}
+            <Field label="Rol *">
+              <select value={edit.role} onChange={(e) => set('role', e.target.value)}>
+                {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </Field>
+            {edit.role !== 'system_admin' && (
+              <Field label="Almacén *">
+                <select value={edit.warehouse_id} onChange={(e) => set('warehouse_id', e.target.value)}>
+                  <option value="">— Elegir —</option>
+                  {warehouses.filter((w) => w.active).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
                 </select>
+              </Field>)}
+            <label className="check"><input type="checkbox" checked={edit.active} onChange={(e) => set('active', e.target.checked)} /> Activo (puede ingresar)</label>
+          </div>
+          {!isNew && (
+            <div className="panel" style={{ marginTop: 16, marginBottom: 0 }}>
+              <h3>Cambiar contraseña de este usuario</h3>
+              <div className="toolbar" style={{ marginBottom: 0 }}>
+                <input type="text" placeholder="Nueva contraseña" value={newPass} onChange={(e) => setNewPass(e.target.value)} autoComplete="off" />
+                <button className="btn" onClick={resetPass}>Cambiar</button>
               </div>
-              <div>
-                <label className="label">Estado</label>
-                <select
-                  className="input"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as 'activo')}
-                  disabled={!canEditRole && !!editing}
-                >
-                  <option value="activo">Activo</option>
-                  <option value="inactivo">Inactivo</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="label">Almacenes asignados</label>
-              <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
-                {warehouses.map((w) => (
-                  <label key={w.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={selectedWarehouses.includes(w.id)}
-                      onChange={() => toggleWarehouse(w.id)}
-                    />
-                    {w.name}
-                  </label>
-                ))}
-                {warehouses.length === 0 && (
-                  <p className="text-xs text-slate-400">Primero crea al menos un almacén.</p>
-                )}
-              </div>
-            </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
-              <button type="submit" disabled={saving} className="btn-primary">
-                {saving ? 'Guardando…' : 'Guardar'}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
+              {edit.id !== me?.id && <div style={{ marginTop: 12 }}><button className="btn btn-danger" onClick={del}>Eliminar usuario</button></div>}
+            </div>)}
+        </Modal>)}
     </div>
-  )
+  );
 }

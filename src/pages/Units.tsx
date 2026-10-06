@@ -1,131 +1,70 @@
-import { useEffect, useState } from 'react'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
-import { supabase } from '../lib/supabaseClient'
-import type { Unit } from '../lib/types'
-import Modal from '../components/Modal'
-import ConfirmDialog from '../components/ConfirmDialog'
+import { useMemo, useState } from 'react';
+import { supabase } from '../supabase';
+import { useAuth } from '../lib/auth';
+import { useLookups } from '../lib/lookups';
+import { fmtQty, num } from '../lib/util';
+import { Empty, Field, Modal, PageHeader, SearchBox, norm, useAction, useToast } from '../components/ui';
+
+const blank = { name: '', abbreviation: '', base_unit: '', factor: '', description: '' };
 
 export default function Units() {
-  const [rows, setRows] = useState<Unit[]>([])
-  const [editing, setEditing] = useState<Unit | null>(null)
-  const [showForm, setShowForm] = useState(false)
-  const [name, setName] = useState('')
-  const [abbr, setAbbr] = useState('')
-  const [deleting, setDeleting] = useState<Unit | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { units, reload } = useLookups();
+  const { isAdmin } = useAuth();
+  const run = useAction(); const toast = useToast();
+  const [q, setQ] = useState('');
+  const [edit, setEdit] = useState<any | null>(null);
+  const list = useMemo(() => units.filter((u) => norm(`${u.name} ${u.abbreviation || ''}`).includes(norm(q))), [units, q]);
+  const set = (k: string, v: any) => setEdit({ ...edit, [k]: v });
+  const pos = edit?.id ? list.findIndex((u) => u.id === edit.id) : -1;
+  const open = (u?: any) => setEdit(u ? { ...blank, ...Object.fromEntries(Object.entries(u).map(([k, v]) => [k, v ?? ''])) } : { ...blank });
 
-  async function load() {
-    const { data } = await supabase.from('units').select('*').order('name')
-    setRows((data as Unit[]) ?? [])
-  }
-  useEffect(() => {
-    load()
-  }, [])
-
-  function openNew() {
-    setEditing(null)
-    setName('')
-    setAbbr('')
-    setError(null)
-    setShowForm(true)
-  }
-  function openEdit(u: Unit) {
-    setEditing(u)
-    setName(u.name)
-    setAbbr(u.abbreviation ?? '')
-    setError(null)
-    setShowForm(true)
-  }
-
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
-    setError(null)
-    const payload = { name, abbreviation: abbr || null }
-    const result = editing
-      ? await supabase.from('units').update(payload).eq('id', editing.id)
-      : await supabase.from('units').insert(payload)
-    if (result.error) return setError(result.error.message)
-    setShowForm(false)
-    load()
-  }
-
-  async function handleDelete() {
-    if (!deleting) return
-    const { error } = await supabase.from('units').delete().eq('id', deleting.id)
-    if (error) setError(error.message)
-    setDeleting(null)
-    load()
-  }
+  const save = async () => {
+    const e = edit;
+    if (!e.name.trim()) return toast('Escribe el nombre de la unidad.', 'error');
+    if (!String(e.abbreviation).trim()) return toast('Escribe la abreviatura.', 'error');
+    if (e.base_unit && num(e.factor) <= 0) return toast('Indica cuántas unidades base contiene.', 'error');
+    const payload = { name: e.name.trim(), abbreviation: e.abbreviation.trim(), base_unit: e.base_unit || null, factor: e.base_unit ? num(e.factor) : null, description: e.description?.trim() || null };
+    const ok = await run(async () => {
+      const r = e.id ? await supabase.from('units').update(payload).eq('id', e.id) : await supabase.from('units').insert(payload);
+      if (r.error) throw r.error; return true;
+    }, 'Unidad guardada');
+    if (ok) { setEdit(null); reload(); }
+  };
+  const del = async (u: any) => {
+    if (!window.confirm(`¿Eliminar la unidad "${u.name}"? Solo se puede si ningún producto la usa.`)) return;
+    const ok = await run(async () => { const { error } = await supabase.from('units').delete().eq('id', u.id); if (error) throw error; return true; }, 'Unidad eliminada');
+    if (ok) { setEdit(null); reload(); }
+  };
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Unidades de manejo</h1>
-        <button className="btn-primary" onClick={openNew}>
-          <Plus size={18} /> Nueva unidad
-        </button>
-      </div>
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
-            <tr>
-              <th className="px-4 py-3">Nombre</th>
-              <th className="px-4 py-3">Abreviatura</th>
-              <th className="px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((u) => (
-              <tr key={u.id} className="border-t border-slate-100">
-                <td className="px-4 py-3">{u.name}</td>
-                <td className="px-4 py-3">{u.abbreviation || '—'}</td>
-                <td className="px-4 py-3 text-right">
-                  <button className="mr-2 text-slate-500 hover:text-brand-600" onClick={() => openEdit(u)}>
-                    <Pencil size={16} />
-                  </button>
-                  <button className="text-slate-500 hover:text-red-600" onClick={() => setDeleting(u)}>
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-slate-400">Sin unidades todavía.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {showForm && (
-        <Modal title={editing ? 'Editar unidad' : 'Nueva unidad'} onClose={() => setShowForm(false)}>
-          <form onSubmit={handleSave} className="space-y-3">
-            <div>
-              <label className="label">Nombre</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Caja, Kilogramo, Unidad..." />
-            </div>
-            <div>
-              <label className="label">Abreviatura</label>
-              <input className="input" value={abbr} onChange={(e) => setAbbr(e.target.value)} placeholder="cja, kg, und..." />
-            </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-secondary" onClick={() => setShowForm(false)}>Cancelar</button>
-              <button type="submit" className="btn-primary">Guardar</button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {deleting && (
-        <ConfirmDialog
-          message={`¿Eliminar la unidad "${deleting.name}"?`}
-          onConfirm={handleDelete}
-          onCancel={() => setDeleting(null)}
-        />
-      )}
+      <PageHeader title="Unidades de manejo" subtitle="Litro, bidón, caja, bolsa… Una unidad puede contener otras (ej. Caja = 12 unidades)."
+        actions={isAdmin ? <button className="btn btn-primary" onClick={() => open()}>Nueva unidad</button> : undefined} />
+      <div className="toolbar"><SearchBox value={q} onChange={setQ} placeholder="Buscar unidad…" /></div>
+      <div className="table-wrap"><table className="grid">
+        <thead><tr><th>Nombre</th><th>Abreviatura</th><th>Equivalencia</th><th>Descripción</th>{isAdmin && <th />}</tr></thead>
+        <tbody>{list.map((u) => (
+          <tr key={u.id} className={isAdmin ? 'clickable' : ''} onClick={() => isAdmin && open(u)}>
+            <td><b>{u.name}</b></td><td>{u.abbreviation}</td><td>{u.base_unit && u.factor ? `${fmtQty(u.factor)} ${u.base_unit}` : '—'}</td><td>{u.description}</td>
+            {isAdmin && <td><div className="row-actions"><button className="btn btn-sm btn-danger" onClick={(ev) => { ev.stopPropagation(); del(u); }}>Eliminar</button></div></td>}
+          </tr>))}</tbody>
+      </table>{!list.length && <Empty text="No hay unidades." />}</div>
+      {edit && (
+        <Modal title={edit.id ? 'Editar unidad' : 'Nueva unidad de manejo'} onClose={() => setEdit(null)}
+          footer={<>
+            {edit.id && <><button className="btn" disabled={pos <= 0} onClick={() => open(list[pos - 1])}>◀ Anterior</button>
+              <button className="btn" disabled={pos < 0 || pos >= list.length - 1} onClick={() => open(list[pos + 1])}>Siguiente ▶</button>
+              <button className="btn btn-danger" style={{ marginRight: 'auto' }} onClick={() => del(edit)}>Eliminar</button></>}
+            <button className="btn" onClick={() => setEdit(null)}>Cancelar</button><button className="btn btn-primary" onClick={save}>Guardar</button></>}>
+          <div className="form-grid">
+            <Field label="Nombre *"><input value={edit.name} onChange={(e) => set('name', e.target.value)} /></Field>
+            <Field label="Abreviatura *"><input value={edit.abbreviation} onChange={(e) => set('abbreviation', e.target.value)} /></Field>
+            <Field label="Unidad base (si contiene otras)"><select value={edit.base_unit} onChange={(e) => set('base_unit', e.target.value)}>
+              <option value="">— ninguna —</option>{units.filter((u) => u.id !== edit.id).map((u) => <option key={u.id} value={u.abbreviation || u.name}>{u.name}</option>)}</select></Field>
+            <Field label="Contiene (cantidad de la unidad base)"><input type="number" min="0" step="any" disabled={!edit.base_unit} value={edit.factor} onChange={(e) => set('factor', e.target.value)} /></Field>
+            <Field label="Descripción" full><input value={edit.description} onChange={(e) => set('description', e.target.value)} /></Field>
+          </div>
+        </Modal>)}
     </div>
-  )
+  );
 }
