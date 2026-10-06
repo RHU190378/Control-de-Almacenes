@@ -23,6 +23,20 @@ sistema_almacenes
 7. Abre `src/config.ts` y reemplaza solo estas dos líneas:
    - `SUPABASE_URL`  → tu Project URL
    - `SUPABASE_KEY`  → tu clave pública (anon / publishable)
+github: https://github.com/RHU190378/Control-de-Almacenes.git
+
+…or create a new repository on the command line
+echo "# Control-de-Almacenes" >> README.md
+git init
+git add README.md
+git commit -m "primer lanzamiento"
+git branch -M main
+git remote add origin https://github.com/RHU190378/Control-de-Almacenes.git
+git push -u origin main
+…or push an existing repository from the command line
+git remote add origin https://github.com/RHU190378/Control-de-Almacenes.git
+git branch -M main
+git push -u origin main
 
 ## PARTE C — Netlify (publicar)
 
@@ -31,7 +45,7 @@ sistema_almacenes
    Si Netlify lo pide: comando `npm run build`, carpeta de publicación `dist`.
 9. Abre la dirección que te da Netlify. Verás **"¿Primera vez? Crear el administrador inicial"**.
    Escribe tu nombre, **el mismo correo del paso 2** y la contraseña que quieras. Listo.
-
+https://sistema-almacenes.netlify.app
 ## Después
 
 - **Más usuarios:** dentro del programa, menú **Usuarios** > Nuevo usuario (nombre, correo, contraseña, rol y almacén).
