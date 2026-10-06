@@ -3,7 +3,7 @@
 //  Los dos datos están en Supabase > Project Settings > API
 // =====================================================================
 const SUPABASE_URL = "https://rrgppwnupeoofywvfwfz.supabase.co";          // ej: https://abcdefgh.supabase.co
-const SUPABASE_KEY = "sb_publishable_Ja34UIEQftS4frY52fJ9uA_VuVOas2n";        // "Publishable key" o "anon public"
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhb2V1Z3p6bWN3amR6b3N1aWR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MTA3MDcsImV4cCI6MjEwNjM4NjcwN30.G6YDm8jW0sP0pMr98JhakRslWiH3RH1Dp8pFOoxgKdI";        // "Publishable key" o "anon public"
 
 // (Opcional) también se pueden definir como variables en Netlify:
 // VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY. Si existen, se usan primero.
